@@ -39,7 +39,7 @@ export async function POST(
         // Update or create lesson progress
         const { data: existingProgress } = await supabase
             .from('lesson_progress')
-            .select('id, time_spent_seconds')
+            .select('id, time_spent_seconds, completed')
             .eq('user_id', user.id)
             .eq('lesson_id', params.lessonId)
             .single();
@@ -120,7 +120,7 @@ export async function GET(
     { params }: { params: { id: string; lessonId: string } }
 ) {
     try {
-        const supabase = await createClient();
+        const supabase = await createServerClient();
 
         // Get current user
         const { data: { user }, error: userError } = await supabase.auth.getUser();
