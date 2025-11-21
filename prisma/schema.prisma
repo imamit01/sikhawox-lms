@@ -1,0 +1,409 @@
+// VELLARI - Advanced EdTech Platform
+// Prisma Schema with Purchase Approval Workflow
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER MANAGEMENT & AUTHENTICATION
+// ============================================
+
+enum UserRole {
+  SUPER_ADMIN
+  MODERATOR
+  INSTRUCTOR
+  STUDENT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  password      String    // Hashed
+  role          UserRole  @default(STUDENT)
+  avatar        String?
+  bio           String?
+  
+  // VELLARI Tracking Fields
+  lastLogin     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  enrollments         Enrollment[]
+  purchaseRequests    PurchaseRequest[]
+  activityLogs        ActivityLog[]
+  mockTestAttempts    MockTestAttempt[]
+  createdCourses      Course[]          @relation("CourseCreator")
+  moderatedBy         User?             @relation("ModeratorRelation", fields: [moderatorId], references: [id])
+  moderatorId         String?
+  moderatedUsers      User[]            @relation("ModeratorRelation")
+  
+  @@index([email])
+  @@index([role])
+}
+
+// ============================================
+// PURCHASE REQUEST SYSTEM (CRITICAL FEATURE)
+// ============================================
+
+enum PurchaseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model PurchaseRequest {
+  id              String          @id @default(cuid())
+  userId          String
+  courseId        String
+  status          PurchaseStatus  @default(PENDING)
+  
+  // Payment Details
+  transactionId   String?         // Payment proof reference
+  amount          Float
+  paymentProof    String?         // URL to uploaded proof
+  
+  // Admin Actions
+  reviewedBy      String?         // Admin who approved/rejected
+  reviewedAt      DateTime?
+  rejectionReason String?
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  // Relations
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course          Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([courseId])
+  @@index([status])
+  @@unique([userId, courseId]) // Prevent duplicate requests
+}
+
+// ============================================
+// COURSE STRUCTURE
+// ============================================
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Course {
+  id              String        @id @default(cuid())
+  title           String
+  slug            String        @unique
+  description     String
+  thumbnail       String?
+  price           Float
+  level           CourseLevel
+  status          CourseStatus  @default(DRAFT)
+  
+  // Metadata
+  duration        Int?          // In hours
+  language        String        @default("English")
+  tags            String[]      // Array of tags
+  
+  // Creator
+  creatorId       String
+  creator         User          @relation("CourseCreator", fields: [creatorId], references: [id])
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Relations
+  modules         Module[]
+  enrollments     Enrollment[]
+  purchaseRequests PurchaseRequest[]
+  mockTests       MockTest[]
+  
+  @@index([slug])
+  @@index([status])
+  @@index([creatorId])
+}
+
+model Module {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  order       Int
+  courseId    String
+  
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons     Lesson[]
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([courseId])
+  @@unique([courseId, order])
+}
+
+enum LessonType {
+  VIDEO
+  TEXT
+  CODING_CHALLENGE
+  MIXED // For combined content
+}
+
+model Lesson {
+  id              String      @id @default(cuid())
+  title           String
+  type            LessonType
+  order           Int
+  moduleId        String
+  
+  // Content Fields
+  videoUrl        String?
+  markdownContent String?     // For text lessons
+  duration        Int?        // In minutes
+  
+  module          Module      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  codingProblems  CodingProblem[]
+  progress        LessonProgress[]
+  
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  @@index([moduleId])
+  @@unique([moduleId, order])
+}
+
+// ============================================
+// CODING PROBLEMS & TEST CASES
+// ============================================
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+}
+
+model CodingProblem {
+  id              String          @id @default(cuid())
+  title           String
+  description     String          // Problem statement
+  difficulty      DifficultyLevel
+  lessonId        String?
+  mockTestId      String?
+  
+  // Code Templates
+  starterCode     String?         // Initial code for students
+  solutionCode    String?         // Reference solution (hidden)
+  
+  // Constraints
+  timeLimit       Int             @default(2000) // In milliseconds
+  memoryLimit     Int             @default(256)  // In MB
+  
+  lesson          Lesson?         @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  mockTest        MockTest?       @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  testCases       TestCase[]
+  submissions     CodeSubmission[]
+  
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  @@index([lessonId])
+  @@index([mockTestId])
+}
+
+model TestCase {
+  id              String        @id @default(cuid())
+  problemId       String
+  input           String        // JSON or plain text
+  expectedOutput  String
+  isHidden        Boolean       @default(false) // Hidden from students
+  points          Int           @default(10)
+  
+  problem         CodingProblem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  
+  @@index([problemId])
+}
+
+// ============================================
+// CODE EXECUTION & SUBMISSIONS
+// ============================================
+
+enum SubmissionStatus {
+  PENDING
+  RUNNING
+  ACCEPTED
+  WRONG_ANSWER
+  TIME_LIMIT_EXCEEDED
+  MEMORY_LIMIT_EXCEEDED
+  RUNTIME_ERROR
+  COMPILATION_ERROR
+}
+
+model CodeSubmission {
+  id              String            @id @default(cuid())
+  userId          String
+  problemId       String
+  code            String
+  language        String            // cpp, java, python
+  status          SubmissionStatus  @default(PENDING)
+  
+  // Results
+  executionTime   Int?              // In milliseconds
+  memoryUsed      Int?              // In KB
+  score           Int?              // Points earned
+  testsPassed     Int               @default(0)
+  totalTests      Int               @default(0)
+  
+  problem         CodingProblem     @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime          @default(now())
+  
+  @@index([userId])
+  @@index([problemId])
+  @@index([status])
+}
+
+// ============================================
+// ENROLLMENT & PROGRESS TRACKING
+// ============================================
+
+model Enrollment {
+  id              String    @id @default(cuid())
+  userId          String
+  courseId        String
+  
+  // Progress
+  completedLessons Int      @default(0)
+  totalLessons     Int      @default(0)
+  progressPercent  Float    @default(0)
+  
+  enrolledAt      DateTime  @default(now())
+  lastAccessedAt  DateTime  @default(now())
+  
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessonProgress  LessonProgress[]
+  
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+}
+
+model LessonProgress {
+  id              String      @id @default(cuid())
+  enrollmentId    String
+  lessonId        String
+  isCompleted     Boolean     @default(false)
+  timeSpent       Int         @default(0) // In seconds
+  
+  enrollment      Enrollment  @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  lesson          Lesson      @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  
+  completedAt     DateTime?
+  
+  @@unique([enrollmentId, lessonId])
+  @@index([enrollmentId])
+  @@index([lessonId])
+}
+
+// ============================================
+// ACTIVITY LOGGING (For Student Spy)
+// ============================================
+
+enum ActivityType {
+  LOGIN
+  LOGOUT
+  LESSON_COMPLETE
+  CODE_SUBMIT
+  MOCK_TEST_START
+  MOCK_TEST_COMPLETE
+}
+
+model ActivityLog {
+  id              String        @id @default(cuid())
+  userId          String
+  activityType    ActivityType
+  
+  // Session Details
+  ipAddress       String?
+  userAgent       String?
+  duration        Int?          // In seconds (for sessions)
+  
+  // Task Details
+  tasksCompleted  Int           @default(0)
+  metadata        Json?         // Additional context
+  
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timestamp       DateTime      @default(now())
+  
+  @@index([userId])
+  @@index([activityType])
+  @@index([timestamp])
+}
+
+// ============================================
+// MOCK TESTS
+// ============================================
+
+model MockTest {
+  id              String        @id @default(cuid())
+  title           String
+  description     String?
+  courseId        String?
+  
+  // Test Configuration
+  duration        Int           // In minutes
+  totalMarks      Int
+  passingMarks    Int
+  
+  // Scheduling
+  isPublished     Boolean       @default(false)
+  startTime       DateTime?
+  endTime         DateTime?
+  
+  course          Course?       @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  problems        CodingProblem[]
+  attempts        MockTestAttempt[]
+  
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@index([courseId])
+  @@index([isPublished])
+}
+
+model MockTestAttempt {
+  id              String    @id @default(cuid())
+  userId          String
+  mockTestId      String
+  
+  // Results
+  score           Int       @default(0)
+  totalMarks      Int
+  percentile      Float?
+  timeTaken       Int       // In minutes
+  
+  // Answers (JSON array of submission IDs)
+  answers         Json?
+  
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mockTest        MockTest  @relation(fields: [mockTestId], references: [id], onDelete: Cascade)
+  
+  startedAt       DateTime  @default(now())
+  submittedAt     DateTime?
+  
+  @@index([userId])
+  @@index([mockTestId])
+}
