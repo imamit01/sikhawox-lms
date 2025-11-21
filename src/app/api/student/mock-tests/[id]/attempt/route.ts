@@ -15,7 +15,7 @@ export async function POST(
             );
         }
 
-        const supabase = await createClient();
+        const supabase = await createServerClient();
 
         // Get current user
         const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -110,7 +110,7 @@ export async function GET(
     { params }: { params: { id: string } }
 ) {
     try {
-        const supabase = await createClient();
+        const supabase = await createServerClient();
 
         // Get current user
         const { data: { user }, error: userError } = await supabase.auth.getUser();
